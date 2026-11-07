@@ -92,6 +92,13 @@ export const VideoPreviewCard: React.FC<VideoPreviewCardProps> = ({
 
       const hls = new Hls({
         enableWorker: true,
+        // Tolerate flaky connections in the preview player too
+        manifestLoadingTimeOut: 15000,
+        manifestLoadingMaxRetry: 4,
+        levelLoadingTimeOut: 15000,
+        levelLoadingMaxRetry: 4,
+        fragLoadingTimeOut: 40000,
+        fragLoadingMaxRetry: 8,
         xhrSetup: (xhr) => {
           xhr.withCredentials = false;
         },

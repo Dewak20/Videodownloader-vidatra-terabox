@@ -30,6 +30,7 @@ export async function extractVidara(url: string): Promise<StreamExtractResult> {
             Referer: `https://${domain}/`,
           },
           cache: 'no-store',
+          signal: AbortSignal.timeout(15000),
         }).catch(() => null),
         fetch(streamApiUrl, {
           method: 'POST',
@@ -45,6 +46,7 @@ export async function extractVidara(url: string): Promise<StreamExtractResult> {
             codecs: ['h265', 'av1'],
           }),
           cache: 'no-store',
+          signal: AbortSignal.timeout(15000),
         }).catch(() => null),
       ]);
 
@@ -78,6 +80,7 @@ export async function extractVidara(url: string): Promise<StreamExtractResult> {
                   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
               },
               cache: 'no-store',
+              signal: AbortSignal.timeout(15000),
             });
             if (manifestRes.ok) {
               const manifestText = await manifestRes.text();

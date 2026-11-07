@@ -14,6 +14,8 @@ export function nativeRequest(
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    /** Socket inactivity timeout in ms (default 20s) */
+    timeoutMs?: number;
   } = {}
 ): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
@@ -50,7 +52,11 @@ export function nativeRequest(
       }
     );
 
+    // Never let a hung upstream block extraction forever
     req.on('error', (err) => reject(err));
+    req.setTimeout(options.timeoutMs ?? 20_000, () => {
+      req.destroy(new Error(`Upstream timed out after ${options.timeoutMs ?? 20_000}ms`));
+    });
     if (options.body) req.write(options.body);
     req.end();
   });

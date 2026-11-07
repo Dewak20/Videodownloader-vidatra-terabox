@@ -102,6 +102,7 @@ export async function extractTerabox(rawUrl: string): Promise<StreamExtractResul
               Referer: 'https://teravideo.in/',
             },
             cache: 'no-store',
+            signal: AbortSignal.timeout(15000),
           });
 
           if (m3u8Res.ok) {

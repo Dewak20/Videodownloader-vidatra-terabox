@@ -87,11 +87,7 @@ export async function GET(req: NextRequest) {
       upstreamHeaders['Range'] = rangeHeader;
     }
 
-    const upstreamRes = await fetch(targetUrl, {
-      method: 'GET',
-      headers: upstreamHeaders,
-      cache: 'no-store',
-    });
+    const upstreamRes = await fetchUpstream(targetUrl, upstreamHeaders);
 
     const contentType = upstreamRes.headers.get('content-type') || '';
     const isM3u8 =
@@ -132,6 +128,12 @@ export async function GET(req: NextRequest) {
     const acceptRanges = upstreamRes.headers.get('accept-ranges');
     if (acceptRanges) responseHeaders.set('Accept-Ranges', acceptRanges);
 
+    // Segments are immutable assets — let the browser cache them so seeking,
+    // level switches and reconnects don't re-download the same data
+    if (!isM3u8 && (upstreamRes.status === 200 || upstreamRes.status === 206)) {
+      responseHeaders.set('Cache-Control', 'public, max-age=86400');
+    }
+
     return new NextResponse(upstreamRes.body, {
       status: upstreamRes.status,
       headers: responseHeaders,
@@ -142,6 +144,58 @@ export async function GET(req: NextRequest) {
       status: 502,
     });
   }
+}
+
+// Timeout only while waiting for response headers — once the body starts
+// streaming, it is allowed to run as long as it needs (large segments / MP4).
+const UPSTREAM_HEADER_TIMEOUT_MS = 12_000;
+// Extra transparent retries against upstream resets, throttling and 5xx blips.
+const UPSTREAM_MAX_RETRIES = 2;
+
+async function fetchUpstream(
+  targetUrl: string,
+  headers: Record<string, string>
+): Promise<Response> {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= UPSTREAM_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Linear backoff: 500ms, 1000ms
+      await new Promise((r) => setTimeout(r, 500 * attempt));
+    }
+
+    const controller = new AbortController();
+    const headerTimer = setTimeout(() => controller.abort(), UPSTREAM_HEADER_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(targetUrl, {
+        method: 'GET',
+        headers,
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+
+      const retryableStatus = res.status === 429 || (res.status >= 500 && res.status !== 501);
+      if (retryableStatus && attempt < UPSTREAM_MAX_RETRIES) {
+        lastError = new Error(`Upstream responded with HTTP ${res.status}`);
+        await res.arrayBuffer().catch(() => {}); // drain before retrying
+        continue;
+      }
+
+      // Headers arrived — clear the watchdog so the body can stream freely
+      return res;
+    } catch (err: any) {
+      // Header timeout or network reset mid-handshake
+      lastError = err;
+      if (attempt >= UPSTREAM_MAX_RETRIES) {
+        throw err;
+      }
+    } finally {
+      clearTimeout(headerTimer);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Upstream fetch failed');
 }
 
 export async function OPTIONS() {

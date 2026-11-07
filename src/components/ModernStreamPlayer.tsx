@@ -15,6 +15,8 @@ import {
   RotateCw,
   Check,
   Download,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { StreamExtractResult, QualityOption } from '@/types';
 import { formatDuration } from '@/lib/utils';
@@ -46,6 +48,8 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
   const [isBuffering, setIsBuffering] = useState<boolean>(false);
   const [showControls, setShowControls] = useState<boolean>(true);
   const [supportsPiP, setSupportsPiP] = useState<boolean>(false);
+  const [loadError, setLoadError] = useState<boolean>(false);
+  const [reloadKey, setReloadKey] = useState<number>(0);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -64,6 +68,10 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
     )}`;
 
     const video = videoRef.current;
+    // Reset any previous src (native or blob) so a reload starts clean
+    video.removeAttribute('src');
+    video.load();
+    let networkRetryCount = 0;
 
     if (data.streamType === 'mp4' || /\.mp4(\?|$)/i.test(streamUrl)) {
       video.src = proxiedUrl;
@@ -86,6 +94,13 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
         maxBufferHole: 0.5, // Gracefully jump small gaps without stall
         nudgeOffset: 0.2,
         nudgeMaxRetry: 5,
+        // ---- Connection resilience: tolerate flaky networks ----
+        manifestLoadingTimeOut: 15000,
+        manifestLoadingMaxRetry: 4,
+        levelLoadingTimeOut: 15000,
+        levelLoadingMaxRetry: 4,
+        fragLoadingTimeOut: 40000,
+        fragLoadingMaxRetry: 8,
         xhrSetup: (xhr) => {
           xhr.withCredentials = false;
         },
@@ -109,21 +124,43 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
         setIsBuffering(false);
       });
 
+      hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        // Successful playback resets the fatal-error retry budget
+        networkRetryCount = 0;
+      });
+
       hls.on(Hls.Events.ERROR, (_event, errorData) => {
-        if (errorData.fatal) {
-          switch (errorData.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              console.warn('Network error, attempting recovery...');
-              hls.startLoad();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              console.warn('Media error, attempting recovery...');
-              hls.recoverMediaError();
-              break;
-            default:
-              hls.destroy();
-              break;
+        if (!errorData.fatal) return;
+
+        switch (errorData.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR: {
+            // Connection dropped mid-stream — retry with backoff instead of giving up
+            networkRetryCount++;
+            if (networkRetryCount <= 5) {
+              const delay = Math.min(1000 * 2 ** (networkRetryCount - 1), 8000);
+              setTimeout(() => {
+                try {
+                  hls.startLoad();
+                } catch {
+                  setLoadError(true);
+                }
+              }, delay);
+            } else {
+              setLoadError(true);
+            }
+            break;
           }
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            console.warn('Media error, attempting recovery...');
+            try {
+              hls.recoverMediaError();
+            } catch {
+              setLoadError(true);
+            }
+            break;
+          default:
+            setLoadError(true);
+            break;
         }
       });
 
@@ -137,7 +174,7 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
       video.src = proxiedUrl;
       video.play().catch(() => {});
     }
-  }, [streamUrl, data.streamType, data.referer]);
+  }, [streamUrl, data.streamType, data.referer, reloadKey]);
 
   // Handle Play/Pause
   const togglePlay = () => {
@@ -304,6 +341,30 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
     }
   }, []);
 
+  // Restart the stream after a fatal load error or manual retry
+  const handleReload = () => {
+    setLoadError(false);
+    setIsBuffering(true);
+    setReloadKey((k) => k + 1);
+  };
+
+  // Auto-recover when the network comes back (e.g. Wi-Fi reconnect)
+  useEffect(() => {
+    const handleOnline = () => {
+      const hls = hlsRef.current;
+      if (hls) {
+        try {
+          hls.startLoad();
+        } catch {
+          // ignore
+        }
+        setLoadError(false);
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, []);
+
   // Video listeners
   const onTimeUpdate = () => {
     if (!videoRef.current) return;
@@ -415,14 +476,30 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
         />
 
         {/* Buffering Spinner Overlay */}
-        {isBuffering && (
+        {isBuffering && !loadError && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm pointer-events-none z-20">
             <div className="w-16 h-16 rounded-full border-4 border-blue-500/20 border-t-blue-500 animate-spin" />
           </div>
         )}
 
+        {/* Connection / Load Error Overlay */}
+        {loadError && (
+          <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-black/85 backdrop-blur-sm text-center px-6">
+            <AlertCircle className="w-10 h-10 text-red-400" />
+            <p className="text-sm text-gray-200 font-medium max-w-xs">
+              Connection lost or the stream failed to load.
+            </p>
+            <button
+              onClick={handleReload}
+              className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-2 active:scale-95 transition-all shadow-lg"
+            >
+              <RefreshCw className="w-4 h-4" /> Retry Now
+            </button>
+          </div>
+        )}
+
         {/* Big Center Play Button (When Paused) */}
-        {!isPlaying && !isBuffering && (
+        {!isPlaying && !isBuffering && !loadError && (
           <button
             onClick={togglePlay}
             className="absolute inset-0 m-auto w-20 h-20 rounded-full bg-blue-600/90 hover:bg-blue-500 text-white flex items-center justify-center backdrop-blur-md transition-all transform hover:scale-110 shadow-2xl shadow-blue-600/50 z-20"

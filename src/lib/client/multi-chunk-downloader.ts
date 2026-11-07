@@ -44,18 +44,27 @@ export class MultiChunkDownloader {
     return `/api/proxy?url=${encodeURIComponent(targetUrl)}&ref=${encodeURIComponent(this.referer)}`;
   }
 
-  private async fetchChunkWithRetry(url: string, maxRetries = 3): Promise<Uint8Array> {
+  /** Per-attempt watchdog: a stalled segment fetch that produces nothing for this long is retried */
+  private static readonly CHUNK_TIMEOUT_MS = 60_000;
+
+  private async fetchChunkWithRetry(url: string, maxRetries = 5): Promise<Uint8Array> {
     let attempts = 0;
     while (attempts < maxRetries) {
       if (this.abortSignal?.aborted) {
         throw new Error('Download aborted by user');
       }
 
+      // Link the user's abort signal + a per-attempt stall watchdog
+      const controller = new AbortController();
+      const linkAbort = () => controller.abort();
+      const stallTimer = setTimeout(() => controller.abort(), MultiChunkDownloader.CHUNK_TIMEOUT_MS);
+      this.abortSignal?.addEventListener('abort', linkAbort, { once: true });
+
       try {
         const proxyUrl = this.getProxyUrl(url);
         const res = await fetch(proxyUrl, {
           method: 'GET',
-          signal: this.abortSignal,
+          signal: controller.signal,
           cache: 'no-store',
         });
 
@@ -67,11 +76,18 @@ export class MultiChunkDownloader {
         return new Uint8Array(buffer);
       } catch (err: any) {
         attempts++;
-        if (this.abortSignal?.aborted || attempts >= maxRetries) {
+        if (this.abortSignal?.aborted) {
+          throw new Error('Download aborted by user');
+        }
+        if (attempts >= maxRetries) {
           throw err;
         }
-        // Small backoff before retry
-        await new Promise((r) => setTimeout(r, 600 * attempts));
+        // Backoff grows per attempt (400ms, 800ms, 1.2s, ...) so flaky
+        // connections get real recovery time instead of hammering
+        await new Promise((r) => setTimeout(r, 400 * Math.min(attempts, 5) * 2));
+      } finally {
+        clearTimeout(stallTimer);
+        this.abortSignal?.removeEventListener('abort', linkAbort);
       }
     }
     throw new Error('Failed to fetch segment after max retries');
