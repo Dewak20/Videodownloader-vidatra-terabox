@@ -483,7 +483,7 @@ export const VideoPreviewCard: React.FC<VideoPreviewCardProps> = ({
             {isDownloading && (
               <div className="p-4 rounded-2xl bg-surfaceLight/40 border border-blue-500/20 shadow-inner">
                 {/* Status & Stats Top */}
-                <div className="flex items-center justify-between text-xs font-medium text-gray-300 mb-2">
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-xs font-medium text-gray-300 mb-2">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-ping" />
                     <span className="text-white font-bold">{progress.percent}%</span>

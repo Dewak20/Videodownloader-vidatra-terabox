@@ -21,7 +21,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenBatch }) => {
               <span className="font-extrabold text-xl tracking-tight text-white">
                 Vid<span className="text-blue-500">Flow</span>
               </span>
-              <span className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-full flex items-center gap-1">
+              <span className="hidden sm:flex px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-full flex items-center gap-1">
                 <Zap className="w-2.5 h-2.5 text-blue-400" /> V2 Pro
               </span>
             </div>
@@ -36,7 +36,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenBatch }) => {
           {onOpenBatch && (
             <button
               onClick={onOpenBatch}
-              className="px-3.5 py-1.5 text-xs font-medium text-gray-300 hover:text-white bg-surface hover:bg-surfaceLight border border-surfaceLight rounded-lg transition-all flex items-center gap-1.5 shadow-sm"
+              className="px-2.5 sm:px-3.5 py-1.5 text-xs font-medium text-gray-300 hover:text-white bg-surface hover:bg-surfaceLight border border-surfaceLight rounded-lg transition-all flex items-center gap-1.5 shadow-sm"
             >
               <Sparkles className="w-3.5 h-3.5 text-violet-400" />
               <span>Batch Queue</span>

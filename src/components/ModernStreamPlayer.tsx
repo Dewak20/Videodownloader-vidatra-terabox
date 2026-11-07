@@ -13,11 +13,8 @@ import {
   PictureInPicture,
   RotateCcw,
   RotateCw,
-  Film,
-  Zap,
   Check,
   Download,
-  Sliders,
 } from 'lucide-react';
 import { StreamExtractResult, QualityOption } from '@/types';
 import { formatDuration } from '@/lib/utils';
@@ -48,6 +45,7 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [isBuffering, setIsBuffering] = useState<boolean>(false);
   const [showControls, setShowControls] = useState<boolean>(true);
+  const [supportsPiP, setSupportsPiP] = useState<boolean>(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -192,33 +190,119 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
     setShowSettings(false);
   };
 
-  // Handle Fullscreen
+  // Handle Fullscreen (cross-platform).
+  // iPhone Safari does NOT support the Fullscreen API (requestFullscreen),
+  // so fall back to native video fullscreen via webkitEnterFullscreen().
   const toggleFullscreen = () => {
-    if (!containerRef.current) return;
-    if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
+    const container = containerRef.current;
+    const video = videoRef.current as
+      | (HTMLVideoElement & {
+          webkitEnterFullscreen?: () => void;
+          webkitSupportsFullscreen?: boolean;
+        })
+      | null;
+    if (!container || !video) return;
+
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element;
+      webkitExitFullscreen?: () => void;
+    };
+    const activeElement = doc.fullscreenElement || doc.webkitFullscreenElement;
+
+    // Already fullscreen -> exit
+    if (activeElement) {
+      if (doc.fullscreenElement) {
+        doc.exitFullscreen().catch(() => {});
+      } else if (doc.webkitExitFullscreen) {
+        doc.webkitExitFullscreen();
+      }
+      return;
+    }
+
+    if (typeof container.requestFullscreen === 'function') {
+      // iPad Safari + all desktop browsers
+      container.requestFullscreen().catch(() => {});
+    } else if (
+      typeof video.webkitEnterFullscreen === 'function' &&
+      video.webkitSupportsFullscreen !== false
+    ) {
+      // iPhone Safari: only native <video> fullscreen is available
+      video.webkitEnterFullscreen();
     } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
+      const c = container as HTMLDivElement & { webkitRequestFullscreen?: () => void };
+      c.webkitRequestFullscreen?.();
     }
   };
 
-  // Handle PiP
+  // Handle PiP (desktop Picture-in-Picture API + iOS webkitSetPresentationMode fallback)
   const togglePiP = async () => {
-    if (!videoRef.current) return;
+    const video = videoRef.current as
+      | (HTMLVideoElement & {
+          webkitSetPresentationMode?: (mode: string) => void;
+          webkitPresentationMode?: string;
+        })
+      | null;
+    if (!video) return;
     try {
+      if (typeof video.webkitSetPresentationMode === 'function') {
+        const mode =
+          video.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture';
+        video.webkitSetPresentationMode(mode);
+        setIsPiP(mode === 'picture-in-picture');
+        return;
+      }
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
         setIsPiP(false);
       } else {
-        await videoRef.current.requestPictureInPicture();
+        await video.requestPictureInPicture();
         setIsPiP(true);
       }
     } catch (e) {
       console.warn('PiP not supported or denied:', e);
     }
   };
+
+  // Sync fullscreen / PiP state with the browser.
+  // Needed on iOS, where native fullscreen changes don't go through React's
+  // optimistic setIsFullscreen calls.
+  useEffect(() => {
+    const doc = document as Document & { webkitFullscreenElement?: Element };
+    const video = videoRef.current as HTMLVideoElement & { webkitPresentationMode?: string } | null;
+
+    const syncFullscreen = () => {
+      setIsFullscreen(Boolean(doc.fullscreenElement || doc.webkitFullscreenElement));
+    };
+    const syncPresentationMode = () => {
+      if (!video) return;
+      const mode = video.webkitPresentationMode;
+      setIsFullscreen(mode === 'fullscreen');
+      setIsPiP(mode === 'picture-in-picture');
+    };
+
+    document.addEventListener('fullscreenchange', syncFullscreen);
+    document.addEventListener('webkitfullscreenchange', syncFullscreen);
+    video?.addEventListener('webkitpresentationmodechanged', syncPresentationMode);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreen);
+      document.removeEventListener('webkitfullscreenchange', syncFullscreen);
+      video?.removeEventListener('webkitpresentationmodechanged', syncPresentationMode);
+    };
+  }, []);
+
+  // Detect PiP support (iPhone Safari without PiP support won't show the button)
+  useEffect(() => {
+    const video = videoRef.current as
+      | (HTMLVideoElement & { webkitSetPresentationMode?: unknown })
+      | null;
+    if (
+      video &&
+      (typeof video.webkitSetPresentationMode === 'function' || document.pictureInPictureEnabled)
+    ) {
+      setSupportsPiP(true);
+    }
+  }, []);
 
   // Video listeners
   const onTimeUpdate = () => {
@@ -284,8 +368,8 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [duration, isPlaying, isMuted]);
 
-  // Autohide controls on inactivity
-  const handleMouseMove = () => {
+  // Autohide controls on inactivity (mouse on desktop, touch on mobile)
+  const revealControls = () => {
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     if (isPlaying) {
@@ -294,6 +378,14 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
       }, 3000);
     }
   };
+  const handleMouseMove = revealControls;
+
+  useEffect(
+    () => () => {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    },
+    []
+  );
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
   const bufferedPercent = duration > 0 ? (bufferedTime / duration) * 100 : 0;
@@ -305,7 +397,8 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
         ref={containerRef}
         onMouseMove={handleMouseMove}
         onMouseLeave={() => isPlaying && setShowControls(false)}
-        className="relative aspect-video w-full rounded-3xl overflow-hidden bg-black shadow-2xl shadow-blue-950/40 border border-surfaceLight group select-none"
+        onTouchStart={revealControls}
+        className="relative aspect-video w-full rounded-3xl overflow-hidden bg-black shadow-2xl shadow-blue-950/40 border border-surfaceLight group select-none touch-manipulation"
       >
         {/* Core Video Element */}
         <video
@@ -323,7 +416,7 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
 
         {/* Buffering Spinner Overlay */}
         {isBuffering && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-xs pointer-events-none z-20">
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm pointer-events-none z-20">
             <div className="w-16 h-16 rounded-full border-4 border-blue-500/20 border-t-blue-500 animate-spin" />
           </div>
         )}
@@ -345,7 +438,7 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
           }`}
         >
           <div className="flex items-center gap-2">
-            <span className="px-3 py-1 rounded-full bg-black/75 backdrop-blur-md border border-white/10 text-xs font-bold text-blue-400 flex items-center gap-1.5 shadow-lg">
+            <span className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/10 text-[10px] sm:text-xs font-bold text-blue-400 flex items-center gap-1.5 shadow-lg">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               {data.siteName || 'Vidara Streaming'}
             </span>
@@ -365,22 +458,22 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
 
         {/* Bottom Custom Controls Bar */}
         <div
-          className={`absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/60 to-transparent p-4 sm:p-6 flex flex-col justify-end z-30 transition-opacity duration-300 ${
+          className={`absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/60 to-transparent p-3 pt-8 sm:p-6 flex flex-col justify-end z-30 transition-opacity duration-300 ${
             showControls ? 'opacity-100' : 'opacity-0'
           }`}
         >
-          {/* Timeline / Progress Bar */}
-          <div className="relative w-full h-2 mb-3 group/timeline cursor-pointer flex items-center">
+          {/* Timeline / Progress Bar (extra padding = bigger touch target) */}
+          <div className="relative w-full py-2 cursor-pointer flex items-center">
             {/* Background Track */}
-            <div className="absolute inset-0 bg-white/20 rounded-full" />
-            {/* Buffered Buffer Bar */}
+            <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-1.5 sm:h-2 bg-white/20 rounded-full" />
+            {/* Buffered Bar */}
             <div
-              className="absolute top-0 bottom-0 left-0 bg-white/40 rounded-full transition-all duration-150"
+              className="absolute left-0 top-1/2 -translate-y-1/2 h-1.5 sm:h-2 bg-white/40 rounded-full transition-all duration-150"
               style={{ width: `${bufferedPercent}%` }}
             />
             {/* Played Progress Bar */}
             <div
-              className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full"
+              className="absolute left-0 top-1/2 -translate-y-1/2 h-1.5 sm:h-2 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full"
               style={{ width: `${progressPercent}%` }}
             />
             {/* Native Slider Input for Scrubbing */}
@@ -391,43 +484,47 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
               step={0.1}
               value={currentTime}
               onChange={handleSeek}
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+              aria-label="Seek"
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 touch-none"
             />
           </div>
 
           {/* Controls Bottom Row */}
-          <div className="flex items-center justify-between text-white text-xs">
+          <div className="flex items-center justify-between gap-1 text-white text-xs">
             {/* Left Controls: Play, Rewind, Forward, Time */}
-            <div className="flex items-center gap-3 sm:gap-4">
+            <div className="flex items-center gap-0.5 sm:gap-4">
               <button
                 onClick={togglePlay}
-                className="p-1 text-white hover:text-blue-400 transition-colors"
+                className="p-2 sm:p-1 rounded-lg text-white hover:text-blue-400 active:bg-white/15 sm:active:bg-transparent transition-colors"
                 title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+                aria-label={isPlaying ? 'Pause' : 'Play'}
               >
                 {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white" />}
               </button>
 
               <button
                 onClick={() => seekRelative(-5)}
-                className="p-1 text-gray-300 hover:text-white transition-colors"
+                className="p-2 sm:p-1 rounded-lg text-gray-300 hover:text-white active:bg-white/15 sm:active:bg-transparent transition-colors"
                 title="Rewind 5s (J)"
+                aria-label="Rewind 5 seconds"
               >
                 <RotateCcw className="w-4 h-4" />
               </button>
 
               <button
                 onClick={() => seekRelative(5)}
-                className="p-1 text-gray-300 hover:text-white transition-colors"
+                className="p-2 sm:p-1 rounded-lg text-gray-300 hover:text-white active:bg-white/15 sm:active:bg-transparent transition-colors"
                 title="Forward 5s (L)"
+                aria-label="Forward 5 seconds"
               >
                 <RotateCw className="w-4 h-4" />
               </button>
 
-              {/* Volume Controls */}
-              <div className="flex items-center gap-2 group/volume">
+              {/* Volume Controls (hidden on mobile — mobile OS controls volume natively) */}
+              <div className="hidden sm:flex items-center gap-2 group/volume">
                 <button
                   onClick={toggleMute}
-                  className="p-1 text-gray-300 hover:text-white transition-colors"
+                  className="p-2 rounded-lg text-gray-300 hover:text-white transition-colors"
                   title="Mute / Unmute (M)"
                 >
                   {isMuted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
@@ -443,31 +540,32 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
                 />
               </div>
 
-              {/* Time Display */}
-              <div className="font-mono text-xs text-gray-300">
+              {/* Time Display (duration hidden on mobile to save space) */}
+              <div className="font-mono text-[11px] sm:text-xs whitespace-nowrap">
                 <span className="text-white font-semibold">{formatDuration(currentTime)}</span>
-                <span className="text-gray-500 mx-1">/</span>
-                <span>{formatDuration(duration)}</span>
+                <span className="text-gray-500 mx-1 hidden sm:inline">/</span>
+                <span className="hidden sm:inline text-gray-500">{formatDuration(duration)}</span>
               </div>
             </div>
 
             {/* Right Controls: Quality, Speed, PiP, Fullscreen */}
-            <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-0.5 sm:gap-3 flex-shrink-0">
               {/* Settings / Speed Dropdown */}
               <div className="relative">
                 <button
                   onClick={() => setShowSettings(!showSettings)}
-                  className={`p-1.5 rounded-lg transition-colors flex items-center gap-1 ${
-                    showSettings ? 'bg-surfaceLight text-blue-400' : 'text-gray-300 hover:text-white'
+                  className={`p-2 sm:p-1.5 rounded-lg transition-colors flex items-center gap-1 ${
+                    showSettings ? 'bg-surfaceLight text-blue-400' : 'text-gray-300 hover:text-white active:bg-white/15 sm:active:bg-transparent'
                   }`}
                   title="Playback Settings"
+                  aria-label="Playback Settings"
                 >
                   <Settings className="w-4 h-4" />
-                  <span className="text-[11px] font-semibold">{playbackSpeed}x</span>
+                  <span className="text-[11px] font-semibold hidden sm:inline">{playbackSpeed}x</span>
                 </button>
 
                 {showSettings && (
-                  <div className="absolute bottom-10 right-0 w-36 bg-surface/95 backdrop-blur-xl border border-surfaceLight rounded-2xl p-2 shadow-2xl z-50 text-xs">
+                  <div className="absolute bottom-11 sm:bottom-10 right-0 w-36 bg-surface/95 backdrop-blur-xl border border-surfaceLight rounded-2xl p-2 shadow-2xl z-50 text-xs">
                     <p className="text-[10px] uppercase font-bold text-gray-400 px-2 py-1 mb-1">
                       Playback Speed
                     </p>
@@ -475,7 +573,7 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
                       <button
                         key={s}
                         onClick={() => handleSpeedChange(s)}
-                        className={`w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition-colors ${
+                        className={`w-full text-left min-h-[36px] px-2 py-1.5 rounded-lg flex items-center justify-between transition-colors ${
                           playbackSpeed === s ? 'bg-blue-600/20 text-blue-400 font-bold' : 'text-gray-300 hover:bg-surfaceLight'
                         }`}
                       >
@@ -495,7 +593,7 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
                     const q = data.qualities?.find((item) => item.url === e.target.value);
                     if (q) setSelectedQuality(q);
                   }}
-                  className="bg-black/60 border border-white/10 text-white text-xs font-semibold rounded-lg px-2 py-1 outline-none cursor-pointer hover:border-blue-500 transition-colors"
+                  className="bg-black/60 border border-white/10 text-white text-[11px] sm:text-xs font-semibold rounded-lg px-1.5 sm:px-2 py-2 sm:py-1 max-w-[90px] sm:max-w-none outline-none cursor-pointer hover:border-blue-500 transition-colors"
                 >
                   {data.qualities.map((q, idx) => (
                     <option key={idx} value={q.url} className="bg-surface text-white">
@@ -505,22 +603,26 @@ export const ModernStreamPlayer: React.FC<ModernStreamPlayerProps> = ({
                 </select>
               )}
 
-              {/* PiP Button */}
-              <button
-                onClick={togglePiP}
-                className="p-1.5 text-gray-300 hover:text-white transition-colors"
-                title="Picture-in-Picture (P)"
-              >
-                <PictureInPicture className="w-4 h-4" />
-              </button>
+              {/* PiP Button (hidden when the browser can't do PiP, e.g. iPhone) */}
+              {supportsPiP && (
+                <button
+                  onClick={togglePiP}
+                  className="p-2 sm:p-1.5 rounded-lg text-gray-300 hover:text-white active:bg-white/15 sm:active:bg-transparent transition-colors"
+                  title="Picture-in-Picture (P)"
+                  aria-label="Picture in Picture"
+                >
+                  <PictureInPicture className="w-4 h-4" />
+                </button>
+              )}
 
               {/* Fullscreen Button */}
               <button
                 onClick={toggleFullscreen}
-                className="p-1.5 text-gray-300 hover:text-white transition-colors"
+                className="p-2 sm:p-1.5 rounded-lg text-gray-300 hover:text-white active:bg-white/15 sm:active:bg-transparent transition-colors"
                 title="Fullscreen (F)"
+                aria-label="Fullscreen"
               >
-                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                {isFullscreen ? <Minimize className="w-5 h-5 sm:w-4 sm:h-4" /> : <Maximize className="w-5 h-5 sm:w-4 sm:h-4" />}
               </button>
             </div>
           </div>

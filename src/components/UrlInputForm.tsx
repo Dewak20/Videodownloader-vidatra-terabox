@@ -41,14 +41,14 @@ export const UrlInputForm: React.FC<UrlInputFormProps> = ({ onExtract, isLoading
   return (
     <div className="w-full max-w-4xl mx-auto text-center px-4">
       {/* Hero Badge */}
-      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium mb-4">
+      <div className="inline-flex flex-wrap justify-center items-center gap-x-2 gap-y-1 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[11px] sm:text-xs font-medium mb-4">
         <span>🎬 Smooth Online Stream Player</span>
-        <span className="text-gray-500">•</span>
-        <span>TeraBox & Vidara</span>
-        <span className="text-gray-500">•</span>
-        <span>Zero Pop-up Ads</span>
-        <span className="text-gray-500">•</span>
-        <span>Accurate Duration</span>
+        <span className="text-gray-500 hidden sm:inline">•</span>
+        <span className="hidden sm:inline">TeraBox & Vidara</span>
+        <span className="text-gray-500 hidden md:inline">•</span>
+        <span className="hidden md:inline">Zero Pop-up Ads</span>
+        <span className="text-gray-500 hidden md:inline">•</span>
+        <span className="hidden md:inline">Accurate Duration</span>
       </div>
 
       <h1 className="text-3xl sm:text-5xl font-black text-white tracking-tight mb-4 leading-tight">
@@ -65,65 +65,75 @@ export const UrlInputForm: React.FC<UrlInputFormProps> = ({ onExtract, isLoading
 
       {/* Main Input Box */}
       <form onSubmit={handleSubmit} className="relative max-w-3xl mx-auto mb-4">
-        <div className="relative flex items-center bg-surface border border-surfaceLight/80 rounded-2xl shadow-2xl shadow-blue-950/20 p-2 focus-within:border-blue-500/80 focus-within:ring-2 focus-within:ring-blue-500/20 transition-all">
-          <div className="pl-3 pr-2 text-gray-400">
-            <Film className="w-5 h-5 text-blue-400" />
+        <div className="relative flex flex-col sm:flex-row sm:items-center gap-2 bg-surface border border-surfaceLight/80 rounded-2xl shadow-2xl shadow-blue-950/20 p-2 focus-within:border-blue-500/80 focus-within:ring-2 focus-within:ring-blue-500/20 transition-all">
+          {/* URL Input Row */}
+          <div className="flex items-center min-w-0 flex-1">
+            <div className="pl-2 sm:pl-3 pr-2 text-gray-400 flex-shrink-0">
+              <Film className="w-5 h-5 text-blue-400" />
+            </div>
+
+            <input
+              type="text"
+              inputMode="url"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="Paste TeraBox or Vidara link here..."
+              className="w-full min-w-0 bg-transparent text-white placeholder-gray-500 text-base outline-none px-1 py-2"
+              disabled={isLoading}
+            />
+
+            {url && (
+              <button
+                type="button"
+                onClick={() => setUrl('')}
+                className="p-2 sm:p-1.5 text-gray-400 hover:text-white rounded-lg transition-colors mr-1 flex-shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
 
-          <input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="Paste TeraBox (terabox.com / 1024tera.com) or Vidara link..."
-            className="w-full bg-transparent text-white placeholder-gray-500 text-sm sm:text-base outline-none px-2 py-2"
-            disabled={isLoading}
-          />
-
-          {url && (
+          {/* Action Buttons */}
+          <div className="flex items-center gap-2 flex-shrink-0">
             <button
               type="button"
-              onClick={() => setUrl('')}
-              className="p-1.5 text-gray-400 hover:text-white rounded-lg transition-colors mr-1"
+              onClick={handlePaste}
+              className="flex-1 sm:flex-none flex items-center justify-center sm:justify-start gap-1 px-3 py-2.5 sm:py-2 text-xs font-medium text-gray-300 hover:text-white bg-surfaceLight/60 hover:bg-surfaceLight rounded-xl transition-all"
             >
-              <X className="w-4 h-4" />
+              {pasted ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Pasted</span>
+                </>
+              ) : (
+                <>
+                  <Clipboard className="w-3.5 h-3.5" />
+                  <span>Paste</span>
+                </>
+              )}
             </button>
-          )}
 
-          <button
-            type="button"
-            onClick={handlePaste}
-            className="hidden sm:flex items-center gap-1 px-3 py-2 text-xs font-medium text-gray-300 hover:text-white bg-surfaceLight/60 hover:bg-surfaceLight rounded-xl transition-all mr-2"
-          >
-            {pasted ? (
-              <>
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Pasted</span>
-              </>
-            ) : (
-              <>
-                <Clipboard className="w-3.5 h-3.5" />
-                <span>Paste</span>
-              </>
-            )}
-          </button>
-
-          <button
-            type="submit"
-            disabled={!url.trim() || isLoading}
-            className="px-6 py-3 rounded-xl font-bold text-sm text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-600/30 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer"
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Loading Stream...</span>
-              </>
-            ) : (
-              <>
-                <Play className="w-4 h-4 fill-white" />
-                <span>Stream Video</span>
-              </>
-            )}
-          </button>
+            <button
+              type="submit"
+              disabled={!url.trim() || isLoading}
+              className="flex-1 sm:flex-none justify-center px-6 py-3 sm:py-2.5 rounded-xl font-bold text-sm text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-600/30 transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Loading Stream...</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4 fill-white" />
+                  <span>Stream Video</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </form>
 
